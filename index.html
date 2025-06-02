@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>TikTok Downloader</title>
+  <style>
+    body { font-family: Arial; padding: 20px; }
+    input, button { margin: 5px; padding: 5px; }
+    #status { font-weight: bold; margin-top: 10px; }
+
+    #counts {
+      margin-top: 10px;
+      font-size: 14px;
+      font-weight: bold;
+    }
+
+    #progressBarContainer {
+      width: 100%;
+      background: #eee;
+      border: 1px solid #aaa;
+      height: 25px;
+      margin-top: 10px;
+      position: relative;
+    }
+
+    #progressBar {
+      height: 100%;
+      width: 0%;
+      background: green;
+      transition: width 0.3s;
+    }
+
+    #progressText {
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 14px;
+      font-weight: bold;
+      color: #000;
+      line-height: 25px;
+    }
+
+    #log {
+      white-space: pre-line;
+      background: #f4f4f4;
+      border: 1px solid #ccc;
+      padding: 10px;
+      height: 300px;
+      overflow-y: auto;
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <h2>TikTok Video Downloader</h2>
+  <input id="username" placeholder="Enter TikTok username (no @)">
+  <button onclick="getCount()">Check Total Videos</button>
+  <button onclick="startDownload()">Start Download</button>
+  <button onclick="pauseDownload()">Pause</button>
+  <button onclick="resumeDownload()">Resume</button>
+
+  <div id="status">Status: Waiting for input...</div>
+
+  <div id="progressBarContainer">
+    <div id="progressBar"></div>
+    <div id="progressText">0.0000000000%</div>
+  </div>
+
+  <div id="counts">Downloaded: 0 | Skipped: 0</div>
+
+  <div id="log">Log output will appear here.</div>
+
+  <script>
+    let totalVideos = 0;
+    let downloadedCount = 0;
+    let skippedCount = 0;
+    let eventSource;
+
+    function updateStatus(message) {
+      document.getElementById("status").textContent = "Status: " + message;
+    }
+
+    function appendLog(message) {
+      const log = document.getElementById("log");
+      log.textContent += message + "\n";
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function updateProgress() {
+      const handled = downloadedCount + skippedCount;
+      const percent = totalVideos ? (handled / totalVideos) * 100 : 0;
+      const final = Math.min(percent, 100);
+      document.getElementById("progressBar").style.width = final + "%";
+      document.getElementById("progressText").textContent = final.toFixed(10) + "%";
+      document.getElementById("counts").textContent = `Downloaded: ${downloadedCount} | Skipped: ${skippedCount}`;
+    }
+
+    async function getCount() {
+      const username = document.getElementById("username").value.trim();
+      if (!username) return alert("Please enter a username.");
+      updateStatus("Checking video count...");
+      document.getElementById("log").textContent = "";
+      const res = await fetch("/count?username=" + encodeURIComponent(username));
+      const text = await res.text();
+      totalVideos = parseInt(text.match(/\d+/)?.[0]) || 0;
+      downloadedCount = 0;
+      skippedCount = 0;
+      updateProgress();
+      updateStatus("Found " + totalVideos + " videos.");
+      appendLog(text);
+    }
+
+    async function startDownload() {
+      const username = document.getElementById("username").value.trim();
+      if (!username) return alert("Please enter a username.");
+      if (eventSource) eventSource.close();
+      updateStatus("Starting download...");
+      downloadedCount = 0;
+      skippedCount = 0;
+      updateProgress();
+      document.getElementById("log").textContent = "";
+
+      eventSource = new EventSource("/start?username=" + encodeURIComponent(username));
+      eventSource.onmessage = (event) => {
+  const message = event.data;
+  appendLog(message);
+
+  // Count skipped lines
+  if (
+    message.includes("has already been downloaded") ||
+    message.includes("Skipping") ||
+    message.startsWith("SKIPPED:")
+  ) {
+    skippedCount++;
+    updateProgress();
+  }
+
+  // Count downloaded lines using destination or post-process triggers
+  if (
+    message.includes("Destination:") ||
+    message.includes("Deleting original file")
+  ) {
+    downloadedCount++;
+    updateProgress();
+  }
+
+  // Detect when finished
+  if (message.toLowerCase().includes("finished")) {
+    updateStatus("Download finished.");
+    if (eventSource) eventSource.close();
+  }
+};
+
+      eventSource.onerror = () => {
+        updateStatus("Connection closed.");
+        appendLog("Connection lost or download complete.");
+        if (eventSource) eventSource.close();
+      };
+    }
+
+    async function pauseDownload() {
+      if (eventSource) eventSource.close();
+      const res = await fetch("/pause");
+      const text = await res.text();
+      updateStatus("Paused");
+      appendLog(text);
+    }
+
+    async function resumeDownload() {
+      startDownload();
+      updateStatus("Resumed");
+    }
+  </script>
+</body>
+</html>
